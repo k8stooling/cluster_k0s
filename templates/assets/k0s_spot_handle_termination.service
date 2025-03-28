@@ -1,0 +1,12 @@
+[Unit]
+Description=k0s spot instance termination handler
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/k0s_spot_handle_termination.sh
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF

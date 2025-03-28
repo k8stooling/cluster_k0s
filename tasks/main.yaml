@@ -1,0 +1,319 @@
+- name: set default_tags (when not defined)
+  set_fact:
+    default_tags: {}
+  when: default_tags | default({}) == {}
+
+- name: create iam role for k0s cluster
+  iam_role:
+    name: "{{ inventory_hostname }}-k0sClusterRole"
+    assume_role_policy_document: "{{ lookup('template', 'templates/eks_assume_role_policy.json') }}"
+    description: IAM role for k0s cluster
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+  register: cluster_role
+  
+- name: subnet info
+  amazon.aws.ec2_vpc_subnet_info:
+    subnet_ids:
+      - "{{ subnet_ids[0] }}"
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+  register: subnet_info_for_vpc
+  when: "vpcID | default('') == '' and subnet_ids | default([]) | count > 0"
+
+- name: get vpcID
+  set_fact:
+    vpcID: "{{ subnet_info_for_vpc.subnets[0].vpc_id }}"
+  when: "vpcID | default('') == '' and subnet_ids | default([]) | count > 0"
+
+- name: "Get subnet information for {{ vpcID }}"
+  amazon.aws.ec2_vpc_subnet_info:
+    filters:
+      vpc-id: "{{ vpcID }}"
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+  register: subnet_info
+  tags: [ vpc ]
+  when: "vpcID | default('') != '' and subnet_ids | default([]) | count == 0"
+
+- name: "Process subnet info"
+  set_fact:
+    subnet_ids: "{{ subnet_info.subnets | selectattr('tags.type', 'undefined') | map(attribute='subnet_id') | list + 
+                subnet_info.subnets | selectattr('tags.type', 'equalto', 'private') | map(attribute='subnet_id') | list }}"
+  tags: [ vpc ]
+  when: "vpcID | default('') != '' and subnet_ids | default([]) | count == 0"
+
+- name: create sg for k0s
+  amazon.aws.ec2_security_group:
+    name: "{{ inventory_hostname }}"
+    description: sg for k0s
+    vpc_id: "{{ vpcID }}"
+    state: present
+    rules:
+      - proto: icmp
+        icmp_type: 3
+        icmp_code: 1
+        cidr_ip: 10.0.0.0/8
+      - proto: tcp
+        from_port: 0
+        to_port: 65535
+        cidr_ip: 10.0.0.0/8
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+  register: sg_result
+
+- name: print sg
+  debug:
+    var: sg_result
+
+- name: set sg id as facts
+  set_fact:
+    sg_id: "{{ sg_result.group_id }}"
+
+- name: print sg id
+  debug:
+    var: sg_id
+
+- name: set cluster domain name
+  set_fact:
+    cluster_domain_name: "{{ inventory_hostname | replace('_', '-') ~ '.' ~ cluster_dns_zone}}"
+
+- name: create zone for the cluster
+  amazon.aws.route53_zone:
+    state: present
+    zone: "{{ cluster_domain_name }}"
+    comment: "Zone for {{ inventory_hostname }} k0s cluster"
+    tags: "{{ default_tags | combine({'Name': cluster_domain_name }) }}"
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+  tags: [ implement ]
+  register: dns_zone_result
+
+- name: get nameservers for zone
+  community.aws.route53_info:
+    type: NS
+    query: record_sets
+    hosted_zone_id: "{{ dns_zone_result.zone_id }}"
+    start_record_name: "{{ cluster_domain_name }}"
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+  register: nameservers
+
+- name: show nameservers
+  debug:
+    msg: |
+      {{ cluster_domain_name }}
+      {{ nameservers.resource_record_sets | selectattr('name', 'equalto', cluster_domain_name ~ '.')  | map(attribute='resource_records') | first | map(attribute='value')  }}
+
+- name: Create NS records in authoritative zone
+  amazon.aws.route53:
+    state: present
+    zone: "{{ auth_zone_id }}"
+    record: "{{ cluster_domain_name  }}"
+    type: NS
+    ttl: 300
+    value: "{{ nameservers.resource_record_sets | selectattr('name', 'equalto', cluster_domain_name ~ '.')  | map(attribute='resource_records') | first | map(attribute='value') }}"
+    profile: "{{aws_profile_auth_dns | default(aws_profile)}}"
+  check_mode: yes
+  ignore_errors: yes
+  when: "auth_zone_id | default('') != ''"
+  tags: [auth_zone]
+
+- name: create policy for Load Balancer management
+  community.aws.iam_managed_policy:
+    state: present
+    policy_name: "K0SLoadBalancerControllerPolicy"
+    policy_description: "Policy for AWS LoadBalancer Controller to manage EC2 resources."
+    policy: "{{ lookup('template', 'templates/aws_lb_controller.json') }}"
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+
+- name: create policy for DNS zone management
+  community.aws.iam_managed_policy: 
+    policy_name: "Route53ChangeRecordPolicy_{{ inventory_hostname }}"
+    policy_description: "Allow Zone management for cluster"
+    policy: |
+      {
+          "Version": "2012-10-17",
+          "Statement": [
+              {
+                  "Effect": "Allow",
+                  "Action": [
+                      "route53:ChangeResourceRecordSets",
+                      "route53:ListResourceRecordSets",
+                      "route53:ListHostedZones"
+                  ],
+                  "Resource": [
+                      "arn:aws:route53:::hostedzone/{{dns_zone_result.zone_id}}"
+                  ]
+              }
+          ]
+      }
+    state: present
+    profile: "{{ aws_profile }}"
+
+- name: create iam role for k0s nodes
+  amazon.aws.iam_role:
+    name: "{{ inventory_hostname }}-k0sNodesRole"
+    assume_role_policy_document: "{{ lookup('template', 'templates/eks_worker_nodes_assume_role_policy.json') }}"
+    description: IAM role for EKS worker nodes
+    managed_policies:
+      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      - arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess
+      - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      - arn:aws:iam::{{ aws_account }}:policy/K0SLoadBalancerControllerPolicy
+      - arn:aws:iam::{{ aws_account }}:policy/Route53ChangeRecordPolicy_{{ inventory_hostname }}
+    profile: "{{ aws_profile }}"
+    region: "{{ region }}"
+  register: worker_nodes_role
+
+- name: create VPC endpoint for SSM
+  amazon.aws.ec2_vpc_endpoint:
+    state: present
+    region: "{{ region }}"
+    vpc_id: "{{ vpcID }}"
+    service: "com.amazonaws.eu-central-1.{{item}}"
+    vpc_endpoint_security_groups: "{{ [sg_id] }}"
+    vpc_endpoint_subnets: "{{ subnet_ids }}"
+    vpc_endpoint_type: Interface
+    purge_tags: n
+    tags: "{{ default_tags | combine({'Name': item ~ '-' ~ inventory_hostname}) }}"
+    profile: "{{ aws_profile }}"
+  register: vpc_endpoint_result
+  tags: [ ssm ]
+  loop:
+    - ssmmessages
+    - ec2messages
+    - ssm
+
+- name: Find latest Ubuntu Minimal AMI (x86_64)
+  amazon.aws.ec2_ami_info:
+    owners: "099720109477"  # Canonical (Ubuntu)
+    filters:
+      name: "ubuntu-minimal/*-24.04-amd64-*"
+      architecture: "x86_64"
+      virtualization-type: "hvm"
+      root-device-type: "ebs"
+    profile: "{{ aws_profile }}"
+    region: "{{ region | default('eu-central-1') }}"
+  register: ami_find
+
+- name: show ami_find
+  debug:
+    msg: |
+      {{ item.image_id }}
+  loop: "{{ami_find.images}}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: ['never', 'debug']
+
+- name: Get latest Ubuntu Minimal AMI ID (x86_64)
+  set_fact:
+    ami: "{{ ami_find.images | sort(attribute='creation_date') | last  }}"
+
+- name: show ami
+  debug:
+    var: ami.image_id
+
+- name: set default base nodepool
+  set_fact:
+    nodepools: 
+      - description: base
+        type: asg
+    default_tags: "{{ default_tags | combine({'Environment': 'PROD'}) }}"
+  # here we filter all nodepools that are not to be implemented by karpenter -- in this case we add a base nodepool
+
+- name: show tags
+  debug:
+    var: default_tags
+
+- name: Create Launch Template for Spot Instances
+  amazon.aws.ec2_launch_template:
+    name: "k0s_{{ inventory_hostname }}_base"
+    image_id: "{{ ami.image_id }}"
+    instance_type: "{{ instance_type | default('t3a.small') }}"
+    region: "{{ region | default('eu-central-1') }}"
+    profile: "{{ aws_profile }}"
+    security_group_ids: "{{ sg_id }}"
+    block_device_mappings:
+      - device_name: /dev/xvda
+        ebs:
+          delete_on_termination: true
+          volume_size: "20"
+          volume_type: gp3
+          encrypted: true
+    user_data: "{{ lookup('template', 'user_data.txt.j2') | b64encode }}"
+    instance_market_options:
+      market_type: "spot"
+      spot_options:
+        instance_interruption_behavior: "terminate"
+        spot_instance_type: "one-time"
+    iam_instance_profile: "{{ inventory_hostname }}-k0sNodesRole"
+  register: launch_template
+
+- name: show launch_template
+  debug:
+    var: launch_template
+  tags: ['debug', 'never']
+
+- name: Find existing Auto Scaling Group
+  amazon.aws.autoscaling_group_info:
+    name: "k0s-{{ inventory_hostname }}"
+    profile: "{{ aws_profile }}"
+  register: asgs_info
+
+- name: Create Auto Scaling Group
+  amazon.aws.autoscaling_group:
+    name: "k0s-{{ inventory_hostname }}"
+    min_size: "{{ asgs_info.results | selectattr('auto_scaling_group_name', 'equalto', 'k0s-' ~ inventory_hostname) | map(attribute='min_size') | first | default(2) }}"
+    max_size:  "{{ asgs_info.results | selectattr('auto_scaling_group_name', 'equalto', 'k0s-' ~ inventory_hostname) | map(attribute='max_size') | first | default(3) }}"
+    desired_capacity:  "{{ asgs_info.results | selectattr('auto_scaling_group_name', 'equalto', 'k0s-' ~ inventory_hostname) | map(attribute='desired_capacity') | first | default(2) }}"
+    vpc_zone_identifier: "{{ subnet_ids }}"
+    launch_template:
+      launch_template_name: "{{ launch_template.latest_template.launch_template_name }}"
+      version: "$Latest"
+    target_group_arns: []
+    health_check_type: "EC2"
+    wait_for_instances: yes
+    tags:
+      - Key: "Name"
+        Value: "{{ inventory_hostname }}-spot-node"
+        PropagateAtLaunch: true
+    profile: "{{ aws_profile }}"
+  register: asg
+
+- name: debug work_launch details
+  debug:
+    msg: "{{ asg }}"
+  tags: ['debug', 'never']
+
+- name: get launch template id and version
+  set_fact:
+    asg: "{{ asg | default([]) + [ item.item | combine({'launch_template_id': item.latest_template.launch_template_id, 'launch_template_name': item.latest_template.launch_template_name, 'template_version':  item.latest_template.version_number  }) ]  }}"
+  loop: "{{ launch_template.results }}"
+  loop_control:
+    label: "{{ item.item.description }}"
+  tags: ['debug', 'never']
+
+- debug:
+    var: worker_nodes_role
+  tags: ['debug', 'never']
+
+- name: Get default_tags
+  set_fact:
+    updated_tags: "{{ default_tags | combine({'Name': 'RESOURCE_ID' , 'AnsiblePlaybookID': '' }) }}"
+
+- name: Build tags to updated_tags on ASG
+  set_fact:
+    tags_to_asg: "{{ tags_to_asg | default('') ~ 'ResourceId=' ~ 'RESOURCE_ID' ~ ',ResourceType=auto-scaling-group,Key=' ~ item.key ~ ',Value=' ~ item.value ~ ',PropagateAtLaunch=' ~ ('false' if item.key == 'Name' else 'true') ~ '\n' }}"
+  with_items: "{{ updated_tags | dict2items }}"
+  tags: ['debug']
+
+
+- name: update tags on ASG
+  command: "aws autoscaling create-or-update-tags \
+      --tags {{ tags_to_asg | regex_replace('RESOURCE_ID', 'k0s-' ~ inventory_hostname ) }} \
+      --profile {{ aws_profile }} \
+      --region {{ region }}"
+  tags: ['debug']
+

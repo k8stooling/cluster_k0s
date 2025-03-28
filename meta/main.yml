@@ -1,0 +1,16 @@
+#SPDX-License-Identifier: MIT-0
+galaxy_info:
+  author: Kristof Imre Szabo
+  description: Solution Architect
+
+  license: MIT
+
+  min_ansible_version: 2.1
+
+  # If this a Container Enabled role, provide the minimum Ansible Container version.
+  # min_ansible_container_version:
+
+  galaxy_tags:
+  - k8s
+  - aws
+  - k0s
