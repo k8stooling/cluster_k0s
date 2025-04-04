@@ -7,11 +7,10 @@ NODE=$(hostname)
 TOKEN=""
 
 while true; do
-    echo "Current token: $TOKEN"
-
+    
     if [[ -z "$TOKEN" ]]; then
-        echo "Fetching a new metadata token..."
         TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600" -s)
+        echo  "New token received: $TOKEN"
     fi
 
     RESPONSE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s -w "%{http_code}" -o /tmp/spot-action.json http://169.254.169.254/latest/meta-data/spot/instance-action)
