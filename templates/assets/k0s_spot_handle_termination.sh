@@ -1,40 +1,49 @@
 #!/bin/bash
 
+set -euo pipefail
+
 source /etc/default/metadata
 
-NODE=$(hostname)
-
 TOKEN=""
+HTTP_CODE="503"
+ORIGIN=$(hostname)
+METADATA_URL="http://169.254.169.254/latest/meta-data/spot/instance-action"
+TOKEN_URL="http://169.254.169.254/latest/api/token"
 
 while true; do
     
-    if [[ -z "$TOKEN" ]]; then
-        TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600" -s)
-        echo  "New token received: $TOKEN"
+    if [[ -z "$TOKEN" ]] ; then
+        echo "Requesting a new IMDSv2 token..."
+        TOKEN=$(curl -s -X PUT "$TOKEN_URL" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600")
     fi
 
-    RESPONSE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s -w "%{http_code}" -o /tmp/spot-action.json http://169.254.169.254/latest/meta-data/spot/instance-action)
-    HTTP_CODE=${RESPONSE: -3}
+    HTTP_CODE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -o /dev/null -w "%{http_code}" -s "$METADATA_URL")
 
-    if [[ "$HTTP_CODE" == "200" ]]; then
-        ACTION=$(jq -r .action /tmp/spot-action.json)
+    if [[ "$HTTP_CODE" != "404" ]] && [[ ! -f /tmp/terminate-scheduled ]]; then
+        echo "Spot termination notice received!"
 
-        curl -d "$NODE is over" ntfy.sh/Pq0X8xQ0XYVsNTb8
+        k0s kubectl drain "$ORIGIN" --ignore-daemonsets --delete-emptydir-data || true
 
-        k0s kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data
-        
         sleep 40
 
-        k0s kubectl delete node "$NODE"
+        if k0s kubectl delete node "$ORIGIN"; then
+            echo "Node $ORIGIN deleted successfully."
 
-        psql -U "$PGUSER" -d "$PGDB" -h "$PGCONTROLLER" -c "DELETE FROM k0s_tokens WHERE role = 'controller' AND cluster = '$CLUSTER' AND origin = '$NODE';"
+            touch /tmp/terminate-scheduled
 
-        /usr/local/bin/k0s_dns_update.py
+            psql -U "$PGUSER" -d "$PGDB" -h "$PGCONTROLLER" -c \
+                "DELETE FROM k0s_tokens WHERE role = 'controller' AND cluster = '$CLUSTER' AND origin = '$ORIGIN';"
 
-        exit 0
+            /usr/local/bin/update_dns.sh || true
+
+            exit 0
+        else
+            echo "Warning: node delete failed, retrying later..."
+        fi
     fi
 
-    if [[ "$HTTP_CODE" != "404" && "$HTTP_CODE" != "200" ]]; then
+    if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "404" ]]; then
+        echo "Unexpected HTTP code: $HTTP_CODE. Clearing token."
         TOKEN=""
     fi
 

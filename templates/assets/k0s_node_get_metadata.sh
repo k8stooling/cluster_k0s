@@ -1,20 +1,51 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
-METADATA_FILE="/etc/default/metadata"
+MD="/etc/default/metadata"
+IMDS="http://169.254.169.254/latest"
 
-TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600" -s)
-REGION=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/placement/region)
-AZ=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/placement/availability-zone)
-AZ_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/placement/availability-zone-id)
-INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-id)
-INSTANCE_TYPE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-type)
-IPADDR=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/local-ipv4)
-IPR=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/iam/info | jq .InstanceProfileArn -r)
-CLUSTER=$(basename $IPR | sed 's/-k0sNodesRole//')
+# Retry settings
+MAX_RETRIES=10
+SLEEP_SECONDS=3
 
-cat <<EOF > $METADATA_FILE
+get_token() {
+  for i in $(seq 1 "$MAX_RETRIES"); do
+    TOKEN=$(curl -s -X PUT "$IMDS/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600") && break
+    echo "[$i/$MAX_RETRIES] Failed to fetch IMDS token, retrying in $SLEEP_SECONDS sec..."
+    sleep "$SLEEP_SECONDS"
+  done
+
+  if [[ -z "$TOKEN" ]]; then
+    echo "Failed to fetch IMDS token after $MAX_RETRIES attempts"
+    exit 1
+  fi
+}
+
+get_token
+
+h() { curl -sfH "X-aws-ec2-metadata-token: $TOKEN" "$IMDS/meta-data/$1"; }
+
+# Retry metadata queries
+for path in placement/region placement/availability-zone placement/availability-zone-id instance-id instance-type local-ipv4 iam/info; do
+  for i in $(seq 1 "$MAX_RETRIES"); do
+    if h "$path" > /dev/null; then break; fi
+    echo "[$i/$MAX_RETRIES] Waiting for metadata path $path..."
+    sleep "$SLEEP_SECONDS"
+  done
+  h "$path" > /dev/null || { echo "Metadata path $path unavailable after $MAX_RETRIES retries"; exit 1; }
+done
+
+REGION=$(h placement/region)
+AZ=$(h placement/availability-zone)
+AZ_ID=$(h placement/availability-zone-id)
+INSTANCE_ID=$(h instance-id)
+INSTANCE_TYPE=$(h instance-type)
+IPADDR=$(h local-ipv4)
+IPR=$(h iam/info | jq -r .InstanceProfileArn)
+CLUSTER=$(basename "$IPR" | sed 's/-k0sNodesRole//')
+
+cat <<EOF > "$MD"
 export REGION=$REGION
 export AZ=$AZ
 export IPADDR=$IPADDR
@@ -28,7 +59,8 @@ export PGUSER={{ psql_user }}
 export PGDB={{ psql_db }}
 EOF
 
-echo "Metadata written to $METADATA_FILE"
+echo "Metadata written to $MD"
 
+# Shell integrations
 echo "[ -f /etc/default/metadata ] && . /etc/default/metadata" >> /etc/bash.bashrc
-cat /etc/default/metadata | sed 's/^export //' |  awk -F= '{print "set -gx " $1 " \"" $2 "\""}' > /etc/fish/conf.d/metadata.fish
+sed 's/^export //' "$MD" | awk -F= '{print "set -gx " $1 " \"" $2 "\""}' > /etc/fish/conf.d/metadata.fish
