@@ -5,11 +5,10 @@ CLUSTER = os.environ.get('CLUSTER').replace('_', '-')
 DNS = f"rr.{CLUSTER}.{{cluster_dns_zone}}"
 ZONE_ID = os.environ.get("ZONE_ID", "{{dns_zone_result.zone_id}}")
 route53 = boto3.client('route53')
-CUR_HOST = subprocess.check_output("hostname", shell=True).strip().decode()
 TERM_SCHEDULED = os.path.exists("/tmp/terminate-scheduled")
 
 def get_ips():
-    return list(set(f.split()[5] for f in subprocess.check_output("k0s kubectl get nodes -o wide", shell=True).decode().splitlines()[1:] if f.split()[5] != "<none>" and f.split()[1] != "NotReady" and (not TERM_SCHEDULED or f.split()[0] != CUR_HOST)))
+    return list(set(f.split()[5] for f in subprocess.check_output("k0s kubectl get nodes -o wide", shell=True).decode().splitlines()[1:] if f.split()[5] != "<none>" and f.split()[1] != "NotReady" and (not TERM_SCHEDULED or f.split()[0] != os.environ.get("HOSTNAME"))))
 
 def existing_dns():
     try:

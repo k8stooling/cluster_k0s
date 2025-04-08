@@ -4,8 +4,6 @@ set -e
 
 source /etc/default/metadata
 
-HOSTNAME=$(hostname)
-
 echo "topology.kubernetes.io/region=$REGION
 topology.kubernetes.io/zone=$AZ
 topology.kubernetes.io/zone-id=$AZ_ID

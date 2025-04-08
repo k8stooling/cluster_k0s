@@ -9,8 +9,12 @@ for NODE in $NOT_READY_NODES; do
     CURRENT_TIME_SECONDS=$(date +%s)
     TIME_DIFF=$((CURRENT_TIME_SECONDS - LAST_HEARTBEAT_SECONDS))
 
-    if [[ "$TIME_DIFF" -gt 600 && "$READY_NODES" -ge 2 ]]; then
-        echo "Removing NotReady node: $NODE (last seen $TIME_DIFF seconds ago)"
+    if [[ "$TIME_DIFF" -gt 300 ]]; then
+        n "NotReady 5m threshold approaching: $NODE (last seen $TIME_DIFF seconds ago)"
+    fi
+
+    if [[ "$TIME_DIFF" -gt 900 && "$READY_NODES" -ge 1 ]]; then
+        n "Removing NotReady node: $NODE (last seen $TIME_DIFF seconds ago)"
         k0s kubectl delete node "$NODE"        
     fi
 done

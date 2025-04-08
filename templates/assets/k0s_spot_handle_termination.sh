@@ -6,7 +6,6 @@ source /etc/default/metadata
 
 TOKEN=""
 HTTP_CODE="503"
-ORIGIN=$(hostname)
 METADATA_URL="http://169.254.169.254/latest/meta-data/spot/instance-action"
 TOKEN_URL="http://169.254.169.254/latest/api/token"
 
@@ -20,25 +19,25 @@ while true; do
     HTTP_CODE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -o /dev/null -w "%{http_code}" -s "$METADATA_URL")
 
     if [[ "$HTTP_CODE" != "404" ]] && [[ ! -f /tmp/terminate-scheduled ]]; then
-        echo "Spot termination notice received!"
+        n "Spot termination notice received!"
 
-        k0s kubectl drain "$ORIGIN" --ignore-daemonsets --delete-emptydir-data || true
+        k0s kubectl drain "$HOSTNAME" --ignore-daemonsets --delete-emptydir-data || true
 
         sleep 40
 
-        if k0s kubectl delete node "$ORIGIN"; then
-            echo "Node $ORIGIN deleted successfully."
-
+        if k0s kubectl delete node "$HOSTNAME"; then
             touch /tmp/terminate-scheduled
 
             psql -U "$PGUSER" -d "$PGDB" -h "$PGCONTROLLER" -c \
-                "DELETE FROM k0s_tokens WHERE role = 'controller' AND cluster = '$CLUSTER' AND origin = '$ORIGIN';"
+                "DELETE FROM k0s_tokens WHERE role = 'controller' AND cluster = '$CLUSTER' AND origin = '$HOSTNAME';"
 
-            /usr/local/bin/update_dns.sh || true
+            /usr/local/bin/k0s_dns_update.sh || true
+
+            n "$HOSTNAME is off"
 
             exit 0
         else
-            echo "Warning: node delete failed, retrying later..."
+            n "Warning: node delete failed, retrying later..."
         fi
     fi
 

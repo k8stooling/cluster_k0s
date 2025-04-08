@@ -57,10 +57,14 @@ export PGPASSWORD={{ psql_controller_pass }}
 export PGCONTROLLER={{ psql_controller }}
 export PGUSER={{ psql_user }}
 export PGDB={{ psql_db }}
+n() {
+  echo "\$*"
+  curl -s -d "\$*" ntfy.sh/Pq0X8xQ0XYVsNTb8 > /dev/null
+}
 EOF
 
 echo "Metadata written to $MD"
 
 # Shell integrations
 echo "[ -f /etc/default/metadata ] && . /etc/default/metadata" >> /etc/bash.bashrc
-sed 's/^export //' "$MD" | awk -F= '{print "set -gx " $1 " \"" $2 "\""}' > /etc/fish/conf.d/metadata.fish
+grep export $MD | sed 's/^export //' | awk -F= '{print "set -gx " $1 " \"" $2 "\""}' > /etc/fish/conf.d/metadata.fish
