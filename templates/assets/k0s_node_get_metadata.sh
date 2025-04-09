@@ -59,7 +59,7 @@ export PGUSER={{ psql_user }}
 export PGDB={{ psql_db }}
 n() {
   echo "\$*"
-  curl -s -d "\$*" ntfy.sh/Pq0X8xQ0XYVsNTb8 > /dev/null
+  curl -s -d "\$HOSTNAME \$*" ntfy.sh/Pq0X8xQ0XYVsNTb8 > /dev/null
 }
 EOF
 

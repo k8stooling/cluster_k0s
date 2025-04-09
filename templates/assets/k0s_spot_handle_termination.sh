@@ -26,7 +26,7 @@ while true; do
     fi
 
     if [[ "$HTTP_CODE" == "200" && ! -f /tmp/terminate-scheduled ]]; then
-        n "termination notice received!"
+        n "termination notice"
 
         k0s kubectl drain "$HOSTNAME" --ignore-daemonsets --delete-emptydir-data || true
         sleep 40
@@ -38,7 +38,7 @@ while true; do
                 "DELETE FROM k0s_tokens WHERE role = 'controller' AND cluster = '$CLUSTER' AND origin = '$HOSTNAME';"
 
             /usr/local/bin/k0s_dns_update.sh || true
-            n "$HOSTNAME is shut down gracefully."
+            n "down"
             exit 0
         else
             n "Node deletion failed; will retry."

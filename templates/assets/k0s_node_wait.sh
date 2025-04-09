@@ -20,7 +20,7 @@ for ((i=1; i<=MAX_RETRIES; i++)); do
 done
 
 if [[ ! -f "$KUBECONFIG_PATH" ]]; then
-    n "$HOSTNAME failed (missing kubeconfig)"
+    n "failed (missing kubeconfig)"
     exit 1
 fi
 
@@ -33,7 +33,7 @@ for ((i=1; i<=MAX_RETRIES; i++)); do
 
     if [[ -n "$NODE_EXISTS" ]]; then
         echo "Node $HOSTNAME is registered!"
-        n "$HOSTNAME is on"
+        n "on"
         exit 0
     fi
     
@@ -41,5 +41,5 @@ for ((i=1; i<=MAX_RETRIES; i++)); do
     sleep "$RETRY_INTERVAL"
 done
 
-n "Error: Node $HOSTNAME was not registered after $MAX_RETRIES attempts."
+n "Error: not registered after $MAX_RETRIES attempts."
 exit 1
