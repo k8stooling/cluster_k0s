@@ -1,0 +1,11 @@
+[Unit]
+Description=Drain and delete node from Kubernetes on shutdown
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
+
+[Service]
+ExecStart=/usr/local/bin/k0s_node_handle_termination.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=halt.target reboot.target shutdown.target

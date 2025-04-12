@@ -227,6 +227,32 @@
   debug:
     var: default_tags
 
+- name: Create directory for management scripts
+  file:
+    state: directory
+    path: "/tmp/k0s-management-{{ inventory_hostname }}"
+
+- name: set scripts list
+  set_fact:
+    scripts: ['k0s_node_disk_init.sh','k0s_node_get_metadata.sh', 'k0s_spot_handle_termination.sh', 'k0s_ca_restore.sh', 'k0s_token_create.sh',  'k0s_node_init.sh', 'k0s_node_label.sh', 'k0s_node_wait.sh', 'k0s_dns_update.py', 'k0s_dns_update.sh', 'k0s_node_delete_notready.sh', 'k0s_node_handle_termination.sh', 'k0s_node_unregister.sh']
+  run_once: yes
+
+- name: Template out script to temporary path
+  template:
+    src: "assets/{{ item }}"
+    dest: "/tmp/k0s-management-{{ inventory_hostname }}/{{ item }}"
+  loop: "{{ scripts }}"
+
+- name: Compress and base64 encode script
+  shell: |
+    xz -9e -c "/tmp/k0s-management-{{ inventory_hostname }}/{{ item }}" | base64 > "/tmp/k0s-management-{{ inventory_hostname }}/{{ item }}.b64"
+  loop: "{{ scripts }}"
+
+- name: Template out user data for reference
+  template:
+    src: "user_data.txt.j2"
+    dest: "/tmp/k0s-management-{{ inventory_hostname }}/user_data.yaml"
+
 - name: Create Launch Template for Spot Instances
   amazon.aws.ec2_launch_template:
     name: "k0s_{{ inventory_hostname }}_base"

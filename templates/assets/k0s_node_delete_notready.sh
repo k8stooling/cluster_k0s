@@ -2,19 +2,24 @@
 
 . /etc/default/metadata
 
+REBOOT_FLAG="/var/tmp/last-reboot-attempt"
+
 READY_NODES=$(k0s kubectl get nodes --no-headers | grep ' Ready' | wc -l)
 NOT_READY_NODES=$(k0s kubectl get nodes --no-headers | grep -E ' NotReady|SchedulingDisabled' | awk '{print $1}')
 
-now=$(date +%s)
-
 for NODE in $NOT_READY_NODES; do
     ts=$(k0s kubectl get node "$NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastTransitionTime}')
-    [[ -z "$ts" ]] && continue  # skip if node has no Ready condition
-    age=$(( now - $(date -d "$ts" +%s) ))
+    [[ -z "$ts" ]] && continue
+    age=$(( $(date +%s) - $(date -d "$ts" +%s) ))
 
     if (( age > 300 )); then
-        n "NotReady 5m threshold approaching: $NODE (last seen $age sec ago)"
-        [[ "$HOSTNAME" == "$NODE" ]] && { n "Rebooting self"; reboot; }
+        if [[ "$HOSTNAME" == "$NODE" ]]; then
+            if ! find "$REBOOT_FLAG" -mmin -30 &>/dev/null; then
+                n "rebooting"
+                touch "$REBOOT_FLAG"
+                reboot
+            fi
+        fi
     fi
 
     if (( age > 900 )); then
@@ -24,7 +29,8 @@ for NODE in $NOT_READY_NODES; do
 done
 
 if (( READY_NODES < 2 )); then
-    [[ ! -f /tmp/cluster-degraded ]] && { n "Cluster degraded: $NOT_READY_NODES"; touch /tmp/cluster-degraded; }
+    [[ ! -f /tmp/cluster-degraded ]] && { n "⚠️ (ready nodes: $READY_NODES) $NOT_READY_NODES"; touch /tmp/cluster-degraded; }
 else
+    [[ -f /tmp/cluster-degraded ]] && { n "🚀 (ready nodes: $READY_NODES)" }
     rm -f /tmp/cluster-degraded
 fi

@@ -27,24 +27,12 @@ while true; do
 
     if [[ "$HTTP_CODE" == "200" && ! -f /tmp/terminate-scheduled ]]; then
         n "termination notice"
-
-        k0s kubectl drain "$HOSTNAME" --ignore-daemonsets --delete-emptydir-data || true
-        sleep 40
-
-        if k0s kubectl delete node "$HOSTNAME"; then
-            touch /tmp/terminate-scheduled
-
-            psql -U "$PGUSER" -d "$PGDB" -h "$PGCONTROLLER" -c \
-                "DELETE FROM k0s_tokens WHERE role = 'controller' AND cluster = '$CLUSTER' AND origin = '$HOSTNAME';"
-
-            /usr/local/bin/k0s_dns_update.sh || true
-            n "down"
-            exit 0
-        else
-            n "Node deletion failed; will retry."
-        fi
+        /usr/local/bin/k0s_node_unregister.sh || {
+            n "Unregister script failed"
+        }
+        exit 0
     elif [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "404" ]]; then
-        echo "Unexpected $HTTP_CODE — new token."
+        echo "Unexpected HTTP $HTTP_CODE — resetting token"
         TOKEN=""
     fi
 

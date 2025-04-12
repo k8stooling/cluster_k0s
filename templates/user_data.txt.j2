@@ -30,26 +30,35 @@ write_files:
   content: |
     {{ lookup('template', 'roles/cluster_k0s/templates/assets/k0s.yaml') | indent(4) }}
 
-{% for file in ['k0s_node_disk_init.sh','k0s_node_get_metadata.sh', 'k0s_spot_handle_termination.sh', 'k0s_ca_restore.sh', 'k0s_token_create.sh',  'k0s_node_init.sh', 'k0s_node_label.sh', 'k0s_node_wait.sh', 'k0s_dns_update.py', 'k0s_dns_update.sh', 'k0s_node_delete_notready.sh'] %}
-- path: /usr/local/bin/{{ file }}
+- path: /usr/local/bin/k0s_script_restore.sh
   permissions: "0755"
   content: |
-    {{ lookup('template', 'roles/cluster_k0s/templates/assets/' ~ file) | indent(4) }}
+    {{ lookup('template', 'roles/cluster_k0s/templates/assets/k0s_script_restore.sh') | indent(4) }}
+
+{% for file in scripts %}
+- path: /var/tmp/{{ file }}.b64
+  content: |
+    {{ lookup('file', '/tmp/k0s-management-{{ inventory_hostname }}/' ~ file ~ '.b64') | indent(4) }}
 {% endfor %}
 
 - path: /etc/systemd/system/k0s_spot_handle_termination.service
   content: |
     {{ lookup('template', 'roles/cluster_k0s/templates/assets/k0s_spot_handle_termination.service') | indent(4) }}    
 
+- path: /etc/systemd/system/k0s_node_handle_termination.service
+  content: |
+    {{ lookup('template', 'roles/cluster_k0s/templates/assets/k0s_node_handle_termination.service') | indent(4) }}    
+
 - path: /etc/cron.d/k0s-maintain
   owner: "root:root"
   permissions: "0644"
   content: |
-    */5 * * * * root /usr/local/bin/k0s_dns_update.sh >> /var/log/k0s_dns_update.log 2>&1
+    */2 * * * * root /usr/local/bin/k0s_dns_update.sh >> /var/log/k0s_dns_update.log 2>&1
     */5 * * * * root /usr/local/bin/k0s_token_create.sh >> /var/log/k0s_token_create.log 2>&1
     */10 * * * * root /usr/local/bin/k0s_node_delete_notready.sh >> /var/log/k0s_node_delete_notready.log 2>&1
 
 runcmd:
+  - /usr/local/bin/k0s_script_restore.sh
   - /usr/local/bin/k0s_node_disk_init.sh
   - sudo usermod -s /usr/bin/fish root
   - snap install amazon-ssm-agent --classic
