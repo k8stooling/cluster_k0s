@@ -31,6 +31,6 @@ done
 if (( READY_NODES < 2 )); then
     [[ ! -f /tmp/cluster-degraded ]] && { n "⚠️ (ready nodes: $READY_NODES) $NOT_READY_NODES"; touch /tmp/cluster-degraded; }
 else
-    [[ -f /tmp/cluster-degraded ]] && { n "🚀 (ready nodes: $READY_NODES)" }
+    [[ -f /tmp/cluster-degraded ]] && { n "🚀 (ready nodes: $READY_NODES)"; }
     rm -f /tmp/cluster-degraded
 fi
