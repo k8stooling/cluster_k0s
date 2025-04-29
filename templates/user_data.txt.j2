@@ -53,9 +53,8 @@ write_files:
   owner: "root:root"
   permissions: "0644"
   content: |
-    */2 * * * * root /usr/local/bin/k0s_dns_update.sh >> /var/log/k0s_dns_update.log 2>&1
+    */5 * * * * root /usr/local/bin/k0s_dns_update.sh >> /var/log/k0s_dns_update.log 2>&1
     */5 * * * * root /usr/local/bin/k0s_token_create.sh >> /var/log/k0s_token_create.log 2>&1
-    */10 * * * * root /usr/local/bin/k0s_node_delete_notready.sh >> /var/log/k0s_node_delete_notready.log 2>&1
 
 runcmd:
   - /usr/local/bin/k0s_script_restore.sh
@@ -70,3 +69,4 @@ runcmd:
   - /usr/local/bin/k0s_node_init.sh
   - /usr/local/bin/k0s_node_wait.sh
   - /usr/local/bin/k0s_node_label.sh
+  - /usr/local/bin/k0s_dns_update.sh

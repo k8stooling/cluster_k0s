@@ -152,6 +152,53 @@
     state: present
     profile: "{{ aws_profile }}"
 
+- name: create policy for EC2 info management
+  community.aws.iam_managed_policy: 
+    policy_name: "EC2Info_{{ inventory_hostname }}"
+    policy_description: "Allow EC2 and ASG queries for k0s node discovery"
+    policy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "autoscaling:DescribeAutoScalingGroups",
+              "ec2:DescribeInstances"
+            ],
+            "Resource": ["*"]
+          }
+        ]
+      }
+    state: present
+    profile: "{{ aws_profile }}"
+
+- name: create policy for EC2 autoscaling group health management
+  community.aws.iam_managed_policy: 
+    policy_name: "AutoscalingManage_{{ inventory_hostname }}"
+    policy_description: "Allow set autoscaling group instanes health"
+    policy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "autoscaling:SetInstanceHealth",
+            ],
+            "Resource": ["*"],
+            "Condition": {
+              "StringEquals": {
+                "autoscaling:ResourceTag/Name": "k0s-{{ inventory_hostname }}"
+              }
+            }
+          }
+        ]
+      }
+    state: present
+    profile: "{{ aws_profile }}"
+
+
 - name: create iam role for k0s nodes
   amazon.aws.iam_role:
     name: "{{ inventory_hostname }}-k0sNodesRole"
@@ -163,6 +210,8 @@
       - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       - arn:aws:iam::{{ aws_account }}:policy/K0SLoadBalancerControllerPolicy
       - arn:aws:iam::{{ aws_account }}:policy/Route53ChangeRecordPolicy_{{ inventory_hostname }}
+      - arn:aws:iam::{{ aws_account }}:policy/EC2Info_{{ inventory_hostname }}
+      - arn:aws:iam::{{ aws_account }}:policy/AutoscalingManage_{{ inventory_hostname }}
     profile: "{{ aws_profile }}"
     region: "{{ region }}"
   register: worker_nodes_role
@@ -234,7 +283,7 @@
 
 - name: set scripts list
   set_fact:
-    scripts: ['k0s_node_disk_init.sh','k0s_node_get_metadata.sh', 'k0s_spot_handle_termination.sh', 'k0s_ca_restore.sh', 'k0s_token_create.sh',  'k0s_node_init.sh', 'k0s_node_label.sh', 'k0s_node_wait.sh', 'k0s_dns_update.py', 'k0s_dns_update.sh', 'k0s_node_delete_notready.sh', 'k0s_node_handle_termination.sh', 'k0s_node_unregister.sh']
+    scripts: ['k0s_node_disk_init.sh','k0s_node_get_metadata.sh', 'k0s_spot_handle_termination.sh', 'k0s_ca_restore.sh', 'k0s_token_create.sh',  'k0s_node_init.sh', 'k0s_node_label.sh', 'k0s_node_wait.sh', 'k0s_dns_update.py', 'k0s_dns_update.sh', 'k0s_node_handle_termination.sh', 'k0s_node_unregister.sh']
   run_once: yes
 
 - name: Template out script to temporary path
