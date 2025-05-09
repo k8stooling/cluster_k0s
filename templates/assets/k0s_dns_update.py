@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import boto3, os, subprocess, json, time
+import boto3, os, subprocess, json, time, socket, sys
 from datetime import datetime, timezone
 
 # === CONFIG ===
@@ -7,26 +7,28 @@ CLUSTER = os.environ.get('CLUSTER').replace('_', '-')
 DNS_RR = f"rr.{CLUSTER}.{{cluster_dns_zone}}"
 DNS_API = f"api.{CLUSTER}.{{cluster_dns_zone}}"
 ZONE_ID = os.environ.get("ZONE_ID", "{{dns_zone_result.zone_id}}")
-ASG_NAME = "k0s-{{ inventory_hostname }}"
+ASG_NAME = "{{ inventory_hostname | replace('_', '-') }}"
 REGION = "{{ region }}"
-HOSTNAME = os.environ.get("HOSTNAME")
+HOSTNAME = os.environ.get("HOSTNAME") or socket.gethostname()
 TERM_SCHEDULED = os.path.exists("/tmp/terminate-scheduled")
 REBOOT_FLAG = "/var/tmp/last-reboot-attempt"
+UNREACHABLE_FLAG = "/tmp/api_unreachable"
+
 
 # === AWS CLIENTS ===
 route53 = boto3.client('route53', region_name=REGION)
 ec2 = boto3.client('ec2', region_name=REGION)
 asg = boto3.client('autoscaling', region_name=REGION)
 
-
-# === UTIL ===
 def notify(msg):
-    global HOSTNAME
     print(msg)
     os.system(f'curl -s -d "{HOSTNAME} {msg}" ntfy.sh/Pq0X8xQ0XYVsNTb8 > /dev/null')
 
+def loadavg():
+    with open('/proc/loadavg', 'r') as f:
+        loadavg = f.readline()
+    return loadavg.strip()
 
-# === 1. ASG Nodes ===
 def get_asg_nodes():
     instance_ids = []
     response = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[ASG_NAME])
@@ -52,15 +54,26 @@ def get_asg_nodes():
     return ips, names
 
 
-# === 2. k0s / Kubernetes Nodes ===
 def get_k8s_nodes():
     try:
-        output = subprocess.check_output("k0s kubectl get nodes -o json", shell=True).decode()
+        output = subprocess.check_output(
+            "k0s kubectl get nodes -o json",
+            shell=True,
+            stderr=subprocess.STDOUT).decode()
         items = json.loads(output)["items"]
-    except Exception as e:
-        notify(f"kubectl error: {e}")
-        unregister_and_terminate("k0s API unreachable")
-        return []
+        if os.path.exists(UNREACHABLE_FLAG):
+                    notify("k0s API is reachable again. ~ " + loadavg())
+                    os.remove(UNREACHABLE_FLAG)
+
+    except subprocess.CalledProcessError as e:
+        if not os.path.exists(UNREACHABLE_FLAG):
+            notify("k0s API unreachable. Starting 15-minute timer before termination. ~ " + loadavg())
+            open(UNREACHABLE_FLAG, "w").close() 
+        elif (time.time() - os.path.getmtime(UNREACHABLE_FLAG)) > 900:
+            notify(f"k0s API has been unreachable for over 15 minutes.")
+            unregister_and_terminate("k0s API unreachable")        
+
+        sys.exit(1)
 
     nodes = []
     for item in items:
@@ -85,13 +98,11 @@ def get_k8s_nodes():
 
 def unregister_and_terminate(reason=""):
     try:
-        notify(f"Unregistering from ASG and terminating: {reason}")
         asg.set_instance_health(InstanceId=os.environ.get('INSTANCE_ID'), HealthStatus='Unhealthy', ShouldRespectGracePeriod=False)
         subprocess.call("shutdown -h now", shell=True)
     except Exception as e:
-        notify(f"Failed to self-terminate: {e}")
+        pass
 
-# === 3. DNS Update ===
 def update_dns(api_ips, rr_ips):
     def record_change(name, ips):
         return {
@@ -127,8 +138,6 @@ def update_dns(api_ips, rr_ips):
     if rr_ips:
         route53.change_resource_record_sets(HostedZoneId=ZONE_ID, ChangeBatch=record_change(DNS_RR, sorted(rr_ips)))
 
-
-# === 4. Cluster Maintenance ===
 def maintain_cluster(k8s_nodes, asg_node_names):
     ready_nodes = sum(1 for n in k8s_nodes if n["ready"])
 
@@ -147,7 +156,7 @@ def maintain_cluster(k8s_nodes, asg_node_names):
                 open(REBOOT_FLAG, "w").close()
                 subprocess.call("reboot", shell=True)
 
-        if name not in asg_node_names and age > 900:
+        if name not in asg_node_names:
             notify(f"Removing node not in ASG: {name}")
             subprocess.call(f"k0s kubectl delete node {name}", shell=True)
 
@@ -161,7 +170,6 @@ def maintain_cluster(k8s_nodes, asg_node_names):
             os.remove("/tmp/cluster-degraded")
 
 
-# === MAIN ===
 def main():
     asg_ips, asg_node_names = get_asg_nodes()
     k8s_nodes = get_k8s_nodes()
