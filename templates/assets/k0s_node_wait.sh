@@ -2,7 +2,7 @@
 
 source /etc/default/metadata
 
-MAX_RETRIES=20
+MAX_RETRIES=30
 RETRY_INTERVAL=20
 KUBECONFIG_PATH="/var/lib/k0s/pki/admin.conf"
 
@@ -41,5 +41,6 @@ for ((i=1; i<=MAX_RETRIES; i++)); do
     sleep "$RETRY_INTERVAL"
 done
 
-n "Error: not registered after $MAX_RETRIES attempts."
+n "Error: not registered after $MAX_RETRIES attempts. Rebooting node..."
+reboot
 exit 1
