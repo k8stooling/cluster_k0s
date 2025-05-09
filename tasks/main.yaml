@@ -304,7 +304,7 @@
 
 - name: Create Launch Template for Spot Instances
   amazon.aws.ec2_launch_template:
-    name: "k0s_{{ inventory_hostname }}_base"
+    name: "k0s-{{ inventory_hostname | replace('_', '-') }}"
     image_id: "{{ ami.image_id }}"
     instance_type: "{{ instance_type | default('t3a.small') }}"
     region: "{{ region | default('eu-central-1') }}"
@@ -339,7 +339,7 @@
 
 - name: Create Auto Scaling Group
   amazon.aws.autoscaling_group:
-    name: "k0s-{{ inventory_hostname }}"
+    name: "{{ inventory_hostname | replace('_', '-') }}"
     min_size: "{{ asgs_info.results | selectattr('auto_scaling_group_name', 'equalto', 'k0s-' ~ inventory_hostname) | map(attribute='min_size') | first | default(2) }}"
     max_size:  "{{ asgs_info.results | selectattr('auto_scaling_group_name', 'equalto', 'k0s-' ~ inventory_hostname) | map(attribute='max_size') | first | default(3) }}"
     desired_capacity:  "{{ asgs_info.results | selectattr('auto_scaling_group_name', 'equalto', 'k0s-' ~ inventory_hostname) | map(attribute='desired_capacity') | first | default(2) }}"
@@ -351,8 +351,7 @@
     health_check_type: "EC2"
     wait_for_instances: yes
     tags:
-      - Key: "Name"
-        Value: "{{ inventory_hostname }}-spot-node"
+      - Name: "{{ inventory_hostname | replace('_', '- ') }}"
         PropagateAtLaunch: true
     profile: "{{ aws_profile }}"
   register: asg
@@ -387,7 +386,7 @@
 
 - name: update tags on ASG
   command: "aws autoscaling create-or-update-tags \
-      --tags {{ tags_to_asg | regex_replace('RESOURCE_ID', 'k0s-' ~ inventory_hostname ) }} \
+      --tags {{ tags_to_asg | regex_replace('RESOURCE_ID', inventory_hostname | replace('_', '-') ) }} \
       --profile {{ aws_profile }} \
       --region {{ region }}"
   tags: ['debug']
